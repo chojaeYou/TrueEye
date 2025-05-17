@@ -15,7 +15,7 @@ os.system(f"notepad {file_path}")
 진실의 눈 =========================================================
 
 1. Url 입력받기
-2. ChatGPT API로 뉴스 요약 및 키워드 추출
+2. Claude API로 뉴스 요약 및 키워드 추출
 3. KLUE RoBERTa 모델로 뉴스 진위 판단
 4. 결과 출력
 """
@@ -38,7 +38,7 @@ else:
 # 설치할 패키지 목록
 packages = [
     "youtube-transcript-api",
-    "openai",
+    "anthropic",
     "transformers",
     "beautifulsoup4"
 ]
@@ -51,7 +51,7 @@ for package in packages:
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
-import openai
+import anthropic
 import requests
 from bs4 import BeautifulSoup
 #===========================================================================================================
@@ -123,24 +123,29 @@ else:
 
 #==========================================================================================================
 
-# API 키 설정
-openai.api_key = "your-api-key"  # 여기에 네 실제 API 키를 넣어
-
-# 첫 번째 API 호출 - 뉴스 요약
-response_summation = openai.ChatCompletion.create(
-    model="gpt-4",
-    messages=[
-        {"role": "user", "content": news + "\n\n이 뉴스를 '구체적이고 정확한 한줄'로 (약 400자) 요약한 문장만 보여줘. 다른 말은 하지마. 요약 문장만. (뉴스 내용만)"}
-    ],
-    max_tokens=115
+# Claude API 키 설정
+client = anthropic.Anthropic(
+    api_key="your-claude-api-key"
 )
 
+# 뉴스 기사 전문
+news = "여기에 뉴스 전문 텍스트를 넣어줘"
 
-# 결과 추출
-chatgpt_summation = response_summation['choices'][0]['message']['content'].strip()
+# Claude 3 Opus를 이용해 뉴스 요약 요청
+response = client.messages.create(
+    model="claude-3-opus-20240229",
+    max_tokens=120,
+    temperature=0.7,
+    messages=[
+        {
+            "role": "user",
+            "content": news + "\n\n이 뉴스를 '구체적이고 정확한 한줄'로 (약 400자) 요약한 문장만 보여줘. 다른 말은 하지마. 요약 문장만. (뉴스 내용만)"
+        }
+    ]
+)
 
-# 출력
-print(chatgpt_summation)
+# 결과 출력
+claude_summation = response.content[0].text.strip()
 
 
 #==========================================================================================================
@@ -157,7 +162,7 @@ classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 
 # 분류 실행
-result = classifier(chatgpt_summation)[0]
+result = classifier(claude_summation)[0]
 
 # 레이블 맵핑 (0 = 진짜 뉴스, 1 = 가짜 뉴스)
 label_map = {
