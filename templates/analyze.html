@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>분석 중</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <!-- 기사 제목 히어로 -->
+    <div class="hero">
+        <h1>분석 중....</h1>
+    </div>
+
+    <!-- 링크 히어로 -->
+    <div class="hero">
+        <h2>제목</h2>
+        <p>{{ title }}</p>
+        <h2>기사 링크</h2>
+        <p><a href="{{ mesg }}" target="_blank">{{ mesg }}</a></p>
+    </div>
+
+    <!-- 분석 결과 히어로 -->
+    <div class="hero">
+        <h2>제목 토큰</h2>
+        <div class="result">{{ title_tokens }}</div>
+
+        <h2>본문 토큰</h2>
+        <div class="result">{{ content_tokens }}</div>
+
+        <a href="{{ url_for('home') }}"><button>처음으로</button></a>
+    </div>
+</body>
+</html>

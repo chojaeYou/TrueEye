@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>진실의 눈</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container center">
+        <h1>진실의 눈</h1>
+        <p>인공지능 가짜뉴스 판단 서비스 <strong>진실의 눈</strong>입니다.</p>
+        <form action="{{ url_for('do_something') }}" method="post">
+            <input type="text" name="url" placeholder="URL을 입력하세요" required>
+            <button type="submit">입력 완료</button>
+        </form>
+    </div>
+</body>
+</html>

@@ -1,0 +1,102 @@
+/* 기본 페이지 스타일 */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8f9fa;
+    margin: 0;
+    padding: 0;
+}
+
+/* 컨테이너 공통 */
+.container {
+    width: 80%;
+    max-width: 900px;
+    margin: 3rem auto;
+    background-color: #ffffff;
+    padding: 2rem;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* index.html 전용 가운데 정렬 */
+.center {
+    text-align: center;
+}
+
+/* 제목 스타일 */
+h1, h2, h3, h5 {
+    color: #333333;
+}
+
+/* 입력창 스타일 */
+input[type="text"],
+input[type="url"],
+textarea {
+    width: 100%;
+    padding: 0.8rem;
+    margin-bottom: 1rem;
+    border: 1px solid #ced4da;
+    border-radius: 5px;
+}
+
+/* 버튼 스타일 */
+button,
+input[type="submit"] {
+    background-color: #007bff;
+    color: white;
+    padding: 0.7rem 1.4rem;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover,
+input[type="submit"]:hover {
+    background-color: #0056b3;
+}
+
+/* 분석 결과 박스 */
+.result {
+    background-color: #e9f7ef;
+    border-left: 5px solid #28a745;
+    padding: 1rem;
+    margin-top: 1rem;
+    border-radius: 5px;
+    color: #155724;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* 에러 메시지 전용 */
+.error {
+    color: #dc3545;
+    font-weight: bold;
+    font-size: 1.2rem;
+    text-align: center;
+}
+
+/* 링크 스타일 */
+a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* 버튼을 아래로 내리기 위한 여유 */
+button + button, .container a button {
+    margin-top: 1rem;
+}
+
+/* Hero 섹션 - 강조된 큰 블록 */
+.hero {
+    background-color: #ffffff;
+    margin: 2rem auto;
+    padding: 2rem;
+    max-width: 800px;
+    border-radius: 12px;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
