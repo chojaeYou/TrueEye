@@ -1,9 +1,9 @@
 import os
 
 # 새로운 메모장을 열어 특정 파일을 생성
-file_path = f"C:\\Users\\{os.getlogin()}\\Desktop\\memo.txt"
+file_path = f"C:\\Users\\{os.getlogin()}\\Desktop\\진실의 눈.txt"
 with open(file_path, "w", encoding="utf-8") as f:
-    f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and percentage %")
+    f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and Percentage %")
 
 # 메모장을 열어서 해당 파일 표시
 os.system(f"notepad {file_path}")
@@ -59,7 +59,31 @@ print("\n" * 10)
 #==========================================================================================================
 
 
+def question_chatgpt(question):
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        max_tokens=120,
+        temperature=0.7,
+        messages=[
+            {
+                "role": "user",
+                "content": question
+            }
+        ]
+    )
+    return response['choices'][0]['message']['content'].strip()
 
+
+
+
+
+
+
+
+
+
+
+#==========================================================================================================
 
 
 
@@ -136,7 +160,7 @@ if ctypes.windll.user32.MessageBoxW(0, 'To start "진실의 눈" press (Y)', "Pr
 else:
     exit()
 
-articleTemp = ctypes.windll.user32.MessageBoxW(0, 'Article URL [Naver]: (Y), YouTube: (N), Text: (C)', "Program", 0x20 | 0x4)
+articleTemp = ctypes.windll.user32.MessageBoxW(0, 'Article URL [Naver]: (Y), YouTube: (N), Text: (Cancel button)', "Program", 0x20 | 0x3)
 
 if articleTemp == 0x6:  
     Pick_news.get_naver_url()
@@ -158,33 +182,81 @@ else:
 #==========================================================================================================
 
 
-# OpenAI API 키 설정
-openai.api_key = "your-openai-api-key"  # 여기에 네 실제 OpenAI API 키를 넣어
+chatgpt_summation = question_chatgpt(news + "\n\n이 뉴스를 '구체적이고 정확한 한줄'로 (약 400자) 요약한 문장만 보여줘. 다른 말은 하지마. 요약 문장만. (뉴스 내용만)")
 
-# 뉴스 기사 전문
-news = "여기에 뉴스 전문 텍스트를 넣어줘"
 
-# GPT-4를 이용한 뉴스 한 줄 요약
-response = openai.ChatCompletion.create(
-    model="gpt-4",
-    max_tokens=120,
-    temperature=0.7,
-    messages=[
-        {
-            "role": "user",
-            "content": news + "\n\n이 뉴스를 '구체적이고 정확한 한줄'로 (약 400자) 요약한 문장만 보여줘. 다른 말은 하지마. 요약 문장만. (뉴스 내용만)"
-        }
-    ]
-)
 
-# 결과 추출
-chatgpt_summation = response['choices'][0]['message']['content'].strip()
-
+chatgpt_keywords = question_chatgpt(news + "\n\n이 뉴스를 키워드 5개 이하로 요약. 다른 말은 하지마. ex) 000, 000, 000, 000, 000")
 
 
 
 #==========================================================================================================
 
+
+
+
+def get_representative_news(keywords_string, client_id, client_secret):
+    headers = {
+        'X-Naver-Client-Id': client_id,
+        'X-Naver-Client-Secret': client_secret
+    }
+
+    keywords = [kw.strip() for kw in keywords_string.split(",") if kw.strip()]
+    all_links = []
+
+    for kw in keywords:
+        url = f'https://openapi.naver.com/v1/search/news.json?query={kw}&display=5&sort=date'
+        try:
+            response = requests.get(url, headers=headers)
+            items = response.json().get('items', [])
+            all_links.extend([item['link'] for item in items])
+        except:
+            continue
+
+    def crawl(url):
+        try:
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            tag = soup.find('article', {'id': 'dic_area'})
+            return tag.get_text().strip() if tag else None
+        except:
+            return None
+
+    contents = [crawl(link) for link in all_links]
+    contents = [c for c in contents if c]
+
+    if not contents:
+        ctypes.windll.user32.MessageBoxW(0, "No content found", "Error", 0x10 | 0x1)
+        return None
+
+    scores = [sum(c.count(k) for k in keywords) for c in contents]
+    best = contents[scores.index(max(scores))]
+    return best
+
+
+
+client_id = '네이버_API_Client_ID'
+client_secret = '네이버_API_Client_Secret'
+
+keywords = chatgpt_keywords
+another_news = get_representative_news(keywords, client_id, client_secret)
+
+
+
+#==========================================================================================================
+
+
+another_news_summation = question_chatgpt(news + "\n\n이 뉴스를 '구체적이고 정확한 한줄'로 (약 400자) 요약한 문장만 보여줘. 다른 말은 하지마. 요약 문장만. (뉴스 내용만)")
+
+
+#==========================================================================================================
+
+
+
+chatgpt_percentage = question_chatgpt(f"{chatgpt_summation}\n이 문장과 \n{another_news_summation}\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘.")
+
+
+#===========================================================================================================
 
 # KLUE RoBERTa 분류 모델 불러오기
 model = AutoModelForSequenceClassification.from_pretrained("klue/roberta-base", num_labels=2)
@@ -207,3 +279,39 @@ label_map = {
 
 # 결과 출력
 print(f"\n Result: {label_map[result['label']]} ({result['score']:.2%})")
+
+
+#===========================================================================================================
+percentage = result['score'] * 100
+del result
+result = label_map[result['label']]
+
+
+if label_map[result['label']] == "Fake":
+    percentage *= -1
+
+result_percentage = (percentage + chatgpt_percentage) // 2
+result_percentage = abs(result_percentage)
+
+if percentage > 0:
+    last_result = "Real"
+    
+elif percentage < 0:
+    last_result = "Fake"
+
+else:
+    last_result = "Unknown"
+    result_percentage = ""
+
+
+print(f"Final Result: {last_result} ({result_percentage})")
+
+
+# 새로운 메모장을 열어 특정 파일을 생성
+file_path = f"C:\\Users\\{os.getlogin()}\\Desktop\\진실의 눈.txt"
+with open(file_path, "w", encoding="utf-8") as f:
+    f.write(f"Final Result: {last_result} ({result_percentage})")
+
+# 메모장을 열어서 해당 파일 표시
+os.system(f"notepad {file_path}")
+
