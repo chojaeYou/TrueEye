@@ -3,7 +3,7 @@ import os
 # 새로운 메모장을 열어 특정 파일을 생성
 file_path = f"C:\\Users\\{os.getlogin()}\\Desktop\\memo.txt"
 with open(file_path, "w", encoding="utf-8") as f:
-    f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and percentage %")
+    f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and Percentage %")
 
 # 메모장을 열어서 해당 파일 표시
 os.system(f"notepad {file_path}")
@@ -136,7 +136,7 @@ if ctypes.windll.user32.MessageBoxW(0, 'To start "진실의 눈" press (Y)', "Pr
 else:
     exit()
 
-articleTemp = ctypes.windll.user32.MessageBoxW(0, 'Article URL [Naver]: (Y), YouTube: (N), Text: (C)', "Program", 0x20 | 0x4)
+articleTemp = ctypes.windll.user32.MessageBoxW(0, 'Article URL [Naver]: (Y), YouTube: (N), Text: (C)', "Program", 0x20 | 0x3)
 
 if articleTemp == 0x6:  
     Pick_news.get_naver_url()
