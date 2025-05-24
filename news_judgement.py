@@ -3,7 +3,7 @@ import os
 # 새로운 메모장을 열어 특정 파일을 생성
 file_path = f"C:\\Users\\{os.getlogin()}\\Desktop\\memo.txt"
 with open(file_path, "w", encoding="utf-8") as f:
-    f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) percentage %")
+    f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and percentage %")
 
 # 메모장을 열어서 해당 파일 표시
 os.system(f"notepad {file_path}")
