@@ -36,7 +36,7 @@ else:
 # 설치할 패키지 목록
 packages = [
     "youtube-transcript-api",
-    "anthropic",
+    "openai",
     "transformers",
     "beautifulsoup4"
 ]
@@ -49,7 +49,7 @@ for package in packages:
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
-import anthropic
+import openai
 import requests
 from bs4 import BeautifulSoup
 print("\n" * 10)
@@ -157,17 +157,16 @@ else:
 
 #==========================================================================================================
 
-# Claude API 키 설정
-client = anthropic.Anthropic(
-    api_key="your-claude-api-key"
-)
+
+# OpenAI API 키 설정
+openai.api_key = "your-openai-api-key"  # 여기에 네 실제 OpenAI API 키를 넣어
 
 # 뉴스 기사 전문
 news = "여기에 뉴스 전문 텍스트를 넣어줘"
 
-# Claude 3 Opus를 이용해 뉴스 요약 요청
-response = client.messages.create(
-    model="claude-3-opus-20240229",
+# GPT-4를 이용한 뉴스 한 줄 요약
+response = openai.ChatCompletion.create(
+    model="gpt-4",
     max_tokens=120,
     temperature=0.7,
     messages=[
@@ -178,8 +177,10 @@ response = client.messages.create(
     ]
 )
 
-# 결과 출력
-claude_summation = response.content[0].text.strip()
+# 결과 추출
+chatgpt_summation = response['choices'][0]['message']['content'].strip()
+
+
 
 
 #==========================================================================================================
@@ -196,7 +197,7 @@ classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 
 # 분류 실행
-result = classifier(claude_summation)[0]
+result = classifier(chatgpt_summation)[0]
 
 # 레이블 맵핑 (0 = 진짜 뉴스, 1 = 가짜 뉴스)
 label_map = {
