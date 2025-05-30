@@ -253,7 +253,7 @@ another_news_summation = question_chatgpt(news + "\n\n이 뉴스를 '구체적�
 
 
 
-chatgpt_percentage = question_chatgpt(f"{chatgpt_summation}\n이 문장과 \n{another_news_summation}\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘.")
+chatgpt_percentage = int(question_chatgpt(f"{chatgpt_summation}\n이 문장과 \n{another_news_summation}\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘."))
 
 
 #===========================================================================================================
