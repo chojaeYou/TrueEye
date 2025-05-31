@@ -269,6 +269,8 @@ chatgpt_percentage = int(question_chatgpt(f"{chatgpt_summation}\n이 문장과 \
 
 
 #===========================================================================================================
+# Needs to be changed. (fine-tuning) 
+
 
 # KLUE RoBERTa 분류 모델 불러오기
 model = AutoModelForSequenceClassification.from_pretrained("klue/roberta-base", num_labels=2)
