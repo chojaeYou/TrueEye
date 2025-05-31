@@ -1,3 +1,15 @@
+client_id = '네이버_API_Client_ID'
+client_secret = '네이버_API_Client_Secret'
+openai.api_key = 'Open ai 키'
+
+
+
+
+
+
+
+
+
 import os
 
 # 새로운 메모장을 열어 특정 파일을 생성
@@ -237,8 +249,6 @@ def get_representative_news(keywords_string, client_id, client_secret):
 
 
 
-client_id = '네이버_API_Client_ID'
-client_secret = '네이버_API_Client_Secret'
 
 keywords = chatgpt_keywords
 another_news = get_representative_news(keywords, client_id, client_secret)
