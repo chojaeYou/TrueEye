@@ -27,9 +27,10 @@ os.system(f"notepad {file_path}")
 진실의 눈 =========================================================
 
 1. Url 입력받기
-2. Chatgpt API로 뉴스 요약 및 키워드 추출
-3. KLUE RoBERTa 모델로 뉴스 진위 판단
-4. 결과 출력
+2. Chatgpt API로 키워드 추출
+3. 네이버 뉴스 API로 유사사 뉴스 추출
+4. KLUE RoBERTa fine-tuned 모델로 뉴스 진위 판단 (아직 fine-tuning 필요)
+5. 결과 출력
 """
 
 
