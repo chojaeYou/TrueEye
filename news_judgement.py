@@ -196,9 +196,6 @@ else:
 #==========================================================================================================
 
 
-chatgpt_summation = question_chatgpt(news + "\n\n이 뉴스를 '구체적이고 정확한 한줄'로 (약 400자) 요약한 문장만 보여줘. 다른 말은 하지마. 요약 문장만. (뉴스 내용만)")
-
-
 
 chatgpt_keywords = question_chatgpt(news + "\n\n이 뉴스를 키워드 5개 이하로 요약. 다른 말은 하지마. ex) 000, 000, 000, 000, 000")
 
@@ -258,14 +255,8 @@ another_news = get_representative_news(keywords, client_id, client_secret)
 #==========================================================================================================
 
 
-another_news_summation = question_chatgpt(news + "\n\n이 뉴스를 '구체적이고 정확한 한줄'로 (약 400자) 요약한 문장만 보여줘. 다른 말은 하지마. 요약 문장만. (뉴스 내용만)")
 
-
-#==========================================================================================================
-
-
-
-chatgpt_percentage = int(question_chatgpt(f"{chatgpt_summation}\n이 문장과 \n{another_news_summation}\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘."))
+chatgpt_percentage = int(question_chatgpt(f"{news}\n이 문장과 \n{another_news}\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘."))
 
 
 #===========================================================================================================
@@ -283,7 +274,7 @@ classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 
 # 분류 실행
-result = classifier(chatgpt_summation)[0]
+result = classifier(news)[0]
 
 # 레이블 맵핑 (0 = 진짜 뉴스, 1 = 가짜 뉴스)
 label_map = {
