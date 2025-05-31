@@ -52,6 +52,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipe
 import openai
 import requests
 from bs4 import BeautifulSoup
+import webbrowser
 print("\n" * 10)
 
 
@@ -93,7 +94,7 @@ class Pick_news:
         self.news = None
 
     def get_naver_url(self):
-        global news
+        global news, url_find
         def crawl_naver_news(url):
             headers = {
                 "User-Agent": "Mozilla/5.0"  
@@ -113,11 +114,11 @@ class Pick_news:
 
         url = input("Naver news URL: ")
         news = crawl_naver_news(url)
-
+        url_find = url
 
 
     def get_youtube_url(self):
-        global news
+        global news, url_find
         def extract_video_id(url):
             match = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', url)
             if not match:
@@ -127,14 +128,15 @@ class Pick_news:
 
         video_url = input("YouTube video URL: ")
         video_id = extract_video_id(video_url)
-
+        
         try:
             transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko', 'en'])
             news = "\n".join([entry['text'] for entry in transcript])
         except Exception as e:
             ctypes.windll.user32.MessageBoxW(0, f"Fail: {str(e)}", "Error", 0x10 | 0x1)
             exit()
-
+        url_find = video_url
+        
     def get_news(self):
         global news
         news = input("Please enter the news manually: ")
@@ -314,4 +316,7 @@ with open(file_path, "w", encoding="utf-8") as f:
 
 # 메모장을 열어서 해당 파일 표시
 os.system(f"notepad {file_path}")
-
+try:
+    webbrowser.open(url_find)
+except Exception:
+    pass
