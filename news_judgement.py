@@ -1,6 +1,4 @@
-client_id = '네이버_API_Client_ID'
-client_secret = '네이버_API_Client_Secret'
-openai.api_key = 'Open ai 키'
+
 
 
 
@@ -69,7 +67,9 @@ import webbrowser
 print("\n" * 10)
 
 
-
+client_id = '네이버_API_Client_ID'
+client_secret = '네이버_API_Client_Secret'
+openai.api_key = 'Open ai 키'
 #==========================================================================================================
 
 
