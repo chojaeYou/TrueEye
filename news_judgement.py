@@ -1,13 +1,6 @@
 
 
 
-
-
-
-
-
-
-
 import os
 
 # 새로운 메모장을 열어 특정 파일을 생성
@@ -49,7 +42,12 @@ packages = [
     "youtube-transcript-api",
     "openai",
     "transformers",
-    "beautifulsoup4"
+    "beautifulsoup4",
+    "transformers",
+    "datasets",
+    "scikit-learn",
+    "pandas",
+    "torch"
 ]
 
 # 패키지 설치
@@ -263,64 +261,70 @@ chatgpt_percentage = int(question_chatgpt(f"{news}\n이 문장과 \n{another_new
 #===========================================================================================================
 # Needs to be changed. (fine-tuning) 
 
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+from sklearn.model_selection import train_test_split
+import pandas as pd
 
-# KLUE RoBERTa 분류 모델 불러오기
-model = AutoModelForSequenceClassification.from_pretrained("klue/roberta-base", num_labels=2)
+def load_and_prepare_data(file_path, text_col, label_col):
+    df = pd.read_csv(file_path)
+    df = df.rename(columns={text_col: "text", label_col: "label"})
+    df["label"] = df["label"].astype(int)
+    train_texts, test_texts, train_labels, test_labels = train_test_split(
+        df["text"], df["label"], test_size=0.1, random_state=42)
+    train_dataset = Dataset.from_dict({"text": train_texts.tolist(), "label": train_labels.tolist()})
+    test_dataset = Dataset.from_dict({"text": test_texts.tolist(), "label": test_labels.tolist()})
+    return train_dataset, test_dataset
 
-# tokenizer 로드
-tokenizer = AutoTokenizer.from_pretrained("klue/roberta-base")
+def preprocess(tokenizer, dataset):
+    def preprocess_function(examples):
+        return tokenizer(examples["text"], truncation=True, padding=True)
+    tokenized = dataset.map(preprocess_function, batched=True)
+    tokenized = tokenized.rename_column("label", "labels")
+    tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+    return tokenized
 
-# 파이프라인 생성
-classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
+def train_model(train_dataset, test_dataset, model_name, output_dir):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenized_train = preprocess(tokenizer, train_dataset)
+    tokenized_test = preprocess(tokenizer, test_dataset)
 
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
 
-# 분류 실행
-result = classifier(news)[0]
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        evaluation_strategy="epoch",
+        learning_rate=2e-5,
+        per_device_train_batch_size=4,
+        per_device_eval_batch_size=8,
+        num_train_epochs=3,
+        weight_decay=0.01,
+        save_total_limit=1,
+        load_best_model_at_end=True,
+        logging_steps=100,
+        seed=42,
+    )
 
-# 레이블 맵핑 (0 = 진짜 뉴스, 1 = 가짜 뉴스)
-label_map = {
-    "LABEL_0": "Real",
-    "LABEL_1": "Fake"
-}
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_train,
+        eval_dataset=tokenized_test,
+    )
 
-# 결과 출력
-print(f"\n Result: {label_map[result['label']]} ({result['score']:.2%})")
+    trainer.train()
+    trainer.save_model(output_dir)
 
+model_name = "klue/roberta-base"
 
-#===========================================================================================================
-percentage = result['score'] * 100
-del result
-result = label_map[result['label']]
+# 1) NSMC
+train_nsmc, test_nsmc = load_and_prepare_data("nsmc.csv", "document", "label")
+train_model(train_nsmc, test_nsmc, model_name, "./finetuned_klue_nsmc")
 
+# 2) HateSpeech
+train_hate, test_hate = load_and_prepare_data("hatespeech.csv", "sentence", "label")
+train_model(train_hate, test_hate, model_name, "./finetuned_klue_hatespeech")
 
-if label_map[result['label']] == "Fake":
-    percentage *= -1
-
-result_percentage = (percentage + chatgpt_percentage) // 2
-result_percentage = abs(result_percentage)
-
-if percentage > 0:
-    last_result = "Real"
-    
-elif percentage < 0:
-    last_result = "Fake"
-
-else:
-    last_result = "Unknown"
-    result_percentage = ""
-
-
-print(f"Final Result: {last_result} ({result_percentage})")
-
-
-# 새로운 메모장을 열어 특정 파일을 생성
-file_path = f"C:\\Users\\{os.getlogin()}\\Desktop\\진실의 눈.txt"
-with open(file_path, "w", encoding="utf-8") as f:
-    f.write(f"Final Result: {last_result} ({result_percentage})")
-
-# 메모장을 열어서 해당 파일 표시
-os.system(f"notepad {file_path}")
-try:
-    webbrowser.open(url_find)
-except Exception:
-    pass
+# 3) Clickbait
+train_clickbait, test_clickbait = load_and_prepare_data("clickbait.csv", "title", "label")
+train_model(train_clickbait, test_clickbait, model_name, "./finetuned_klue_clickbait")
