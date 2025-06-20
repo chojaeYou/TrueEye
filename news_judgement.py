@@ -255,16 +255,15 @@ another_news = get_representative_news(keywords, client_id, client_secret)
 
 
 
-chatgpt_percentage = int(question_chatgpt(f"{news}\n이 문장과 \n{another_news}\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘."))
+chatgpt_percentage = int(question_chatgpt(f"{news}\n이 문장과 \n{another_news}\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘. 예: 75"))
 
 
 #===========================================================================================================
-# Needs to be changed. (fine-tuning) 
 
-from datasets import Dataset
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
-from sklearn.model_selection import train_test_split
 import pandas as pd
+from datasets import Dataset
+from sklearn.model_selection import train_test_split
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, pipeline
 
 def load_and_prepare_data(file_path, text_col, label_col):
     df = pd.read_csv(file_path)
@@ -314,17 +313,57 @@ def train_model(train_dataset, test_dataset, model_name, output_dir):
 
     trainer.train()
     trainer.save_model(output_dir)
+    return model, tokenizer
+
+def convert_score(result):
+    label_idx = int(result['label'].split('_')[-1])  # 0 or 1
+    score = result['score'] * 100
+    if label_idx == 0:
+        final_score = 100 - score
+    else:
+        final_score = score
+    return round(final_score, 1)
 
 model_name = "klue/roberta-base"
 
-# 1) NSMC
+# 1) NSMC (긍정/부정)
 train_nsmc, test_nsmc = load_and_prepare_data("nsmc.csv", "document", "label")
-train_model(train_nsmc, test_nsmc, model_name, "./finetuned_klue_nsmc")
+model_nsmc, tokenizer_nsmc = train_model(train_nsmc, test_nsmc, model_name, "./finetuned_klue_nsmc")
 
-# 2) HateSpeech
+# 2) HateSpeech (중립/혐오)
 train_hate, test_hate = load_and_prepare_data("hatespeech.csv", "sentence", "label")
-train_model(train_hate, test_hate, model_name, "./finetuned_klue_hatespeech")
+model_hate, tokenizer_hate = train_model(train_hate, test_hate, model_name, "./finetuned_klue_hatespeech")
 
-# 3) Clickbait
+# 3) Clickbait (진짜/가짜 뉴스)
 train_clickbait, test_clickbait = load_and_prepare_data("clickbait.csv", "title", "label")
-train_model(train_clickbait, test_clickbait, model_name, "./finetuned_klue_clickbait")
+model_clickbait, tokenizer_clickbait = train_model(train_clickbait, test_clickbait, model_name, "./finetuned_klue_clickbait")
+
+# 예측용 함수
+def predict(text, model, tokenizer):
+    classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
+    result = classifier(text)[0]
+    score = convert_score(result)
+    return score
+
+
+model_a = predict(news, model_nsmc, tokenizer_nsmc)
+model_b = predict(news, model_hate, tokenizer_hate)
+model_c = predict(news, model_clickbait, tokenizer_clickbait)
+
+
+
+
+
+
+#===========================================================================================================
+
+
+print(f"전체: {(chatgpt_percentage * 0.4) + ((100 - model_a) * 0.25) + ((100 - model_b) * 0.2) + ((100 - model_c) * 0.15})
+
+print(f"유사: {chatgpt_percentage}")
+
+print(f"감정: {model_a}")
+
+print(f"혐오: {model_b}")
+
+print(f"낚시: {model_c}")
