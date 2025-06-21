@@ -1,0 +1,416 @@
+
+
+
+
+
+import os
+import ctypes
+import re
+import requests
+from bs4 import BeautifulSoup
+from youtube_transcript_api import YouTubeTranscriptApi
+import openai
+import pandas as pd
+import torch
+from datasets import Dataset
+from sklearn.model_selection import train_test_split
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, pipeline
+
+# --- 환경 변수에서 API 키 로드 ---
+NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID')
+NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+openai.api_key = OPENAI_API_KEY
+
+FINETUNED_MODELS_DIR = "./finetuned_models"
+
+
+# --- 초기 설정 및 필수 요소 확인 ---
+
+# 1. 패키지 설치 확인 및 자동 설치
+REQUIRED_PACKAGES = [
+    "youtube-transcript-api",
+    "openai",
+    "transformers",
+    "beautifulsoup4",
+    "datasets",
+    "scikit-learn",
+    "pandas",
+    "torch"
+]
+
+print("필요한 Python 패키지를 확인하고 설치합니다...")
+for package in REQUIRED_PACKAGES:
+    try:
+        __import__(package.split("==")[0]) # 버전 정보는 제외하고 모듈명만 임포트 시도
+        print(f"'{package}' (은)는 이미 설치되어 있습니다.")
+    except ImportError:
+        print(f"'{package}' (이)가 설치되어 있지 않습니다. 설치를 시도합니다...")
+        try:
+            # pip를 subprocess로 호출하여 설치
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+            print(f"'{package}' 설치 완료.")
+        except subprocess.CalledProcessError as e:
+            show_message(f"'{package}' 설치 실패: {e}\n프로그램을 종료합니다.", "설치 오류", 0x10 | 0x1)
+            sys.exit(1) # 설치 실패 시 프로그램 종료
+
+# 2. API 키 로드 또는 사용자에게 입력 요청 (보안 주의!)
+# 환경 변수에서 API 키 로드 시도
+NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID')
+NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+# 환경 변수에 없을 경우 사용자에게 직접 입력 요청 (보안상 권장되지 않음, 테스트 용도로만 사용)
+if not NAVER_CLIENT_ID:
+    NAVER_CLIENT_ID = input("NAVER_CLIENT_ID를 입력해주세요: ").strip()
+if not NAVER_CLIENT_SECRET:
+    NAVER_CLIENT_SECRET = input("NAVER_CLIENT_SECRET을 입력해주세요: ").strip()
+if not OPENAI_API_KEY:
+    OPENAI_API_KEY = input("OPENAI_API_KEY를 입력해주세요: ").strip()
+
+# 모든 키가 확보되었는지 최종 확인
+if not all([NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, OPENAI_API_KEY]):
+    show_error_and_exit(
+        "필수 API 키(NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, OPENAI_API_KEY) 중 하나 이상이 누락되었습니다."
+        "\n환경 변수를 설정하거나, 재실행하여 직접 입력해주세요."
+    )
+openai.api_key = OPENAI_API_KEY # OpenAI API 키 설정
+
+# 3. 데이터 파일 확인 및 자동 다운로드 (가정: 파일들이 웹에 공개적으로 호스팅됨)
+# 실제 데이터 파일의 다운로드 URL을 여기에 명시해야 합니다.
+# 예시 URL (실제 작동하는 URL로 변경 필요!)
+DATA_FILES = {
+    "nsmc.csv": "https://example.com/nsmc.csv", # 실제 NSMC CSV 파일 URL로 변경 필요!
+    "hatespeech.csv": "https://example.com/hatespeech.csv", # 실제 HateSpeech CSV 파일 URL로 변경 필요!
+    "clickbait.csv": "https://example.com/clickbait.csv" # 실제 Clickbait CSV 파일 URL로 변경 필요!
+}
+
+print("\n필수 데이터 파일을 확인하고 다운로드합니다...")
+for filename, url in DATA_FILES.items():
+    if not os.path.exists(filename):
+        print(f"'{filename}' 파일이 없습니다. 다운로드를 시도합니다...")
+        try:
+            response = requests.get(url, stream=True)
+            response.raise_for_status() # HTTP 오류가 발생하면 예외 발생
+            with open(filename, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"'{filename}' 다운로드 완료.")
+        except requests.exceptions.RequestException as e:
+            show_error_and_exit(f"'{filename}' 다운로드 실패: {e}\n유효한 다운로드 URL을 확인하거나 파일을 직접 넣어주세요.")
+        except Exception as e:
+            show_error_and_exit(f"'{filename}' 다운로드 중 알 수 없는 오류 발생: {e}")
+    else:
+        print(f"'{filename}' (은)는 이미 존재합니다.")
+
+# 모델 학습 및 저장 디렉토리
+FINETUNED_MODELS_DIR = "./finetuned_models"
+os.makedirs(FINETUNED_MODELS_DIR, exist_ok=True)
+
+# 바탕화면에 안내 파일 생성 (Windows 전용)
+try:
+    file_path = os.path.join(os.path.expanduser("~"), "Desktop", "진실의 눈.txt")
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and Percentage %")
+    os.system(f"notepad \"{file_path}\"")
+except Exception as e:
+    print(f"안내 파일 생성 및 열기 실패: {e}")
+
+# 프로그램 시작 안내 메시지
+if not confirm_action("모듈 로딩 중입니다...", "Program"):
+    sys.exit(0) # '아니오' 선택 시 종료
+
+# --- 유틸리티 함수 ---
+def show_message(text, title="Program", style=0x30 | 0x1):
+    """Windows 메시지 박스를 표시하고 응답을 반환합니다."""
+    return ctypes.windll.user32.MessageBoxW(0, text, title, style)
+
+def confirm_action(text, title="Confirmation"):
+    """Yes/No 확인 메시지 박스를 표시합니다."""
+    return show_message(text, title, 0x20 | 0x4) == 6 # Yes = 6
+
+def show_error_and_exit(text):
+    """오류 메시지를 표시하고 프로그램을 종료합니다."""
+    show_message(text, "Error", 0x10 | 0x1)
+    exit()
+
+def get_chatgpt_response(prompt):
+    """ChatGPT API를 호출하여 응답을 받습니다."""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            max_tokens=120,
+            temperature=0.7,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response['choices'][0]['message']['content'].strip()
+    except openai.error.OpenAIError as e:
+        show_error_and_exit(f"ChatGPT API 오류: {e}")
+    except Exception as e:
+        show_error_and_exit(f"예상치 못한 오류 발생: {e}")
+
+# --- 뉴스 크롤링 및 입력 클래스 ---
+class NewsSource:
+    def __init__(self):
+        self.content = None
+        self.source_url = None
+
+    def _crawl_naver_article(self, url):
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            article_content = soup.find('article', {'id': 'dic_area'})
+            if not article_content:
+                article_content = soup.find('div', class_='go_trans _article_content')
+            
+            if article_content:
+                for tag in article_content(["script", "style", "figcaption", "span", "em", "a"]):
+                    tag.extract()
+                return article_content.get_text().strip()
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"네이버 뉴스 크롤링 실패: {e}")
+            return None
+
+    def get_naver_news(self):
+        while True:
+            url = input("네이버 뉴스 URL: ").strip()
+            if not url:
+                if not confirm_action("URL이 입력되지 않았습니다. 다시 시도하시겠습니까?"): return False
+                continue
+            content = self._crawl_naver_article(url)
+            if content:
+                self.content, self.source_url = content, url
+                return True
+            if not confirm_action("뉴스 본문을 찾을 수 없습니다. URL을 확인하고 다시 시도하시겠습니까?"): return False
+
+    def get_youtube_transcript(self):
+        def extract_video_id(url):
+            match = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', url)
+            return match.group(1) if match else None
+
+        while True:
+            url = input("YouTube 영상 URL: ").strip()
+            if not url:
+                if not confirm_action("URL이 입력되지 않았습니다. 다시 시도하시겠습니까?"): return False
+                continue
+            video_id = extract_video_id(url)
+            if not video_id:
+                if not confirm_action("유효한 YouTube 비디오 ID를 찾을 수 없습니다. URL을 확인하고 다시 시도하시겠습니까?"): return False
+                continue
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                transcript_text = None
+                if 'ko' in [t.language_code for t in transcript_list]:
+                    transcript_text = "\n".join([entry['text'] for entry in YouTubeTranscriptApi.get_transcript(video_id, languages=['ko'])])
+                elif 'en' in [t.language_code for t in transcript_list]:
+                    transcript_text = "\n".join([entry['text'] for entry in YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])])
+                
+                if transcript_text:
+                    self.content, self.source_url = transcript_text, url
+                    return True
+                show_message("해당 비디오에 한국어 또는 영어 스크립트가 없습니다.", "스크립트 없음")
+                if not confirm_action("다른 YouTube URL로 다시 시도하시겠습니까?"): return False
+            except Exception as e:
+                show_message(f"YouTube 스크립트 가져오기 실패: {e}", "스크립트 오류")
+                if not confirm_action("다른 YouTube URL로 다시 시도하시겠습니까?"): return False
+
+    def get_manual_text(self):
+        while True:
+            print("뉴스 내용을 입력하세요. (입력 완료 후 'done' 입력 후 Enter):")
+            lines = []
+            while True:
+                line = input().strip()
+                if line.lower() == 'done': break
+                lines.append(line)
+            
+            text = "\n".join(lines)
+            if not text:
+                if not confirm_action("입력된 텍스트가 없습니다. 다시 시도하시겠습니까?"): return False
+                continue
+            self.content, self.source_url = text, "수동 입력"
+            return True
+
+# --- 네이버 뉴스 검색 및 대표 뉴스 추출 ---
+def get_naver_similar_news(keywords_str, client_id, client_secret):
+    headers = {'X-Naver-Client-Id': client_id, 'X-Naver-Client-Secret': client_secret}
+    keywords = [kw.strip() for kw in keywords_str.split(",") if kw.strip()]
+    unique_items = {} # link: description
+
+    for kw in keywords:
+        try:
+            res = requests.get(f'https://openapi.naver.com/v1/search/news.json?query={kw}&display=5&sort=date', headers=headers)
+            res.raise_for_status()
+            for item in res.json().get('items', []):
+                clean_desc = BeautifulSoup(item.get('description', ''), 'html.parser').get_text()
+                unique_items[item['link']] = clean_desc
+        except requests.exceptions.RequestException as e:
+            print(f"네이버 뉴스 API 요청 오류 ({kw}): {e}")
+        except Exception as e:
+            print(f"네이버 뉴스 검색 중 알 수 없는 오류 ({kw}): {e}")
+
+    candidate_contents = list(unique_items.values())
+    if not candidate_contents: return None
+
+    scores = [sum(c.count(k) for k in keywords) for c in candidate_contents]
+    if not scores or max(scores) == 0: return None
+    
+    return candidate_contents[scores.index(max(scores))]
+
+# --- KLUE RoBERTa Fine-tuning 및 예측 ---
+def load_and_prepare_data(file_path, text_col, label_col):
+    if not os.path.exists(file_path): raise FileNotFoundError(f"데이터 파일 없음: {file_path}")
+    df = pd.read_csv(file_path).rename(columns={text_col: "text", label_col: "label"})
+    df["label"] = df["label"].astype(int)
+    if len(df) < 2: raise ValueError(f"데이터셋이 너무 작음: {file_path}")
+    
+    train_texts, test_texts, train_labels, test_labels = train_test_split(
+        df["text"], df["label"], test_size=0.1, random_state=42, stratify=df["label"])
+    return Dataset.from_dict({"text": train_texts.tolist(), "label": train_labels.tolist()}), \
+           Dataset.from_dict({"text": test_texts.tolist(), "label": test_labels.tolist()})
+
+def preprocess_dataset(tokenizer, dataset):
+    return dataset.map(lambda examples: tokenizer(examples["text"], truncation=True, padding=True, max_length=512), batched=True) \
+                  .rename_column("label", "labels").set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+
+def train_or_load_model(train_ds, test_ds, base_model_name, task_name):
+    output_dir = os.path.join(FINETUNED_MODELS_DIR, f"finetuned_klue_{task_name}")
+    if os.path.exists(output_dir) and os.listdir(output_dir):
+        print(f"'{task_name}' 모델 로드 중...")
+        try: return AutoModelForSequenceClassification.from_pretrained(output_dir), AutoTokenizer.from_pretrained(output_dir)
+        except Exception: print(f"저장된 '{task_name}' 모델 로드 실패. 다시 학습합니다.")
+    
+    print(f"'{task_name}' 모델 파인튜닝 중...")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+        tokenized_train, tokenized_test = preprocess_dataset(tokenizer, train_ds), preprocess_dataset(tokenizer, test_ds)
+        model = AutoModelForSequenceClassification.from_pretrained(base_model_name, num_labels=2).to("cuda" if torch.cuda.is_available() else "cpu")
+        
+        training_args = TrainingArguments(
+            output_dir=output_dir, evaluation_strategy="epoch", learning_rate=2e-5,
+            per_device_train_batch_size=8, per_device_eval_batch_size=16, num_train_epochs=3,
+            weight_decay=0.01, save_total_limit=1, load_best_model_at_end=True,
+            metric_for_best_model="eval_loss", logging_steps=100, seed=42, disable_tqdm=True
+        )
+        Trainer(model=model, args=training_args, train_dataset=tokenized_train, eval_dataset=tokenized_test).train()
+        model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print(f"'{task_name}' 모델 파인튜닝 및 저장 완료.")
+        return model, tokenizer
+    except Exception as e:
+        show_message(f"'{task_name}' 모델 파인튜닝 실패: {e}\n관련 분석을 건너뜜.", "Fine-tuning 오류")
+        return None, None
+
+def get_prediction_score(text, model, tokenizer, positive_label_idx=1):
+    if model is None or tokenizer is None: return 50.0
+    try:
+        classifier = pipeline("text-classification", model=model, tokenizer=tokenizer, device=0 if torch.cuda.is_available() else -1)
+        result = classifier(text)[0]
+        score = result['score'] * 100
+        return round(score if int(result['label'].split('_')[-1]) == positive_label_idx else 100 - score, 1)
+    except Exception as e:
+        print(f"예측 오류: {e}. 기본값 50으로 설정.")
+        return 50.0
+
+# --- 메인 프로그램 실행 ---
+def main():
+    if not all([NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, OPENAI_API_KEY]):
+        show_error_and_exit("API 키가 설정되지 않았습니다. 환경 변수를 확인해주세요.")
+
+    # 초기 안내 파일 생성
+    try:
+        file_path = os.path.join(os.path.expanduser("~"), "Desktop", "진실의 눈.txt")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and Percentage %")
+        os.system(f"notepad \"{file_path}\"")
+    except Exception: pass # 오류 무시, 필수 기능은 아님
+
+    if not confirm_action("프로그램을 시작하시겠습니까?", "시작"): exit()
+
+    print("\n--- 뉴스 입력 ---")
+    news_source = NewsSource()
+    input_choice = show_message("뉴스 입력 방식을 선택하세요:\n[네이버 뉴스 URL]: (Y)\n[YouTube URL]: (N)\n[텍스트 직접 입력]: (Cancel)", "뉴스 입력 선택", 0x20 | 0x3)
+
+    if input_choice == 6: # Yes
+        if not news_source.get_naver_news(): show_error_and_exit("뉴스 입력 실패.")
+    elif input_choice == 7: # No
+        if not news_source.get_youtube_transcript(): show_error_and_exit("뉴스 입력 실패.")
+    elif input_choice == 2: # Cancel
+        if not news_source.get_manual_text(): show_error_and_exit("뉴스 입력 실패.")
+    else:
+        show_error_and_exit("유효하지 않은 선택입니다.")
+
+    news_content = news_source.content
+    source_url = news_source.source_url
+    print(f"\n원본 입력 소스: {source_url}")
+
+    print("\n--- ChatGPT로 키워드 추출 중... ---")
+    keywords = get_chatgpt_response(news_content + "\n\n이 뉴스를 키워드 5개 이하로 요약. 다른 말은 하지마. ex) 000, 000, 000, 000, 000")
+    print(f"추출된 키워드: {keywords}")
+
+    print("\n--- 네이버 뉴스 API로 유사 뉴스 검색 및 유사도 평가 중... ---")
+    similar_news_content = get_naver_similar_news(keywords, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)
+    
+    chatgpt_similarity = 0.0
+    if similar_news_content:
+        try:
+            similarity_prompt = f"{news_content}\n\n이 문장과 \n{similar_news_content}\n\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘. 예: 75"
+            chatgpt_similarity = float(get_chatgpt_response(similarity_prompt))
+            chatgpt_similarity = min(100.0, max(0.0, chatgpt_similarity)) # 0-100 범위 보정
+        except ValueError:
+            print("ChatGPT 유사도 결과가 유효하지 않아 0으로 설정합니다.")
+        except Exception as e:
+            print(f"ChatGPT 유사도 평가 중 오류: {e}. 0으로 설정합니다.")
+    else:
+        print("유사 뉴스를 찾을 수 없어 유사도 평가는 건너뜜.")
+    print(f"유사도 (ChatGPT): {chatgpt_similarity:.1f}%")
+
+    print("\n--- KLUE RoBERTa 모델 로드 및/또는 파인튜닝 시작 ---")
+    model_name = "klue/roberta-base"
+
+    # 감정 분석 (긍정 점수) - label=1이 긍정
+    train_nsmc, test_nsmc = None, None
+    try: train_nsmc, test_nsmc = load_and_prepare_data("nsmc.csv", "document", "label")
+    except (FileNotFoundError, ValueError) as e: print(f"NSMC 데이터셋 오류: {e}. 감정 분석 건너뜜.")
+    model_nsmc, tokenizer_nsmc = train_or_load_model(train_nsmc, test_nsmc, model_name, "nsmc") if train_nsmc else (None, None)
+    sentiment_score = get_prediction_score(news_content, model_nsmc, tokenizer_nsmc, positive_label_idx=1)
+    print(f"감정 분석 (긍정 점수): {sentiment_score:.1f}%")
+
+    # 혐오 분석 (비혐오 점수) - label=0이 중립/비혐오
+    train_hate, test_hate = None, None
+    try: train_hate, test_hate = load_and_prepare_data("hatespeech.csv", "sentence", "label")
+    except (FileNotFoundError, ValueError) as e: print(f"HateSpeech 데이터셋 오류: {e}. 혐오 분석 건너뜜.")
+    model_hate, tokenizer_hate = train_or_load_model(train_hate, test_hate, model_name, "hatespeech") if train_hate else (None, None)
+    hate_speech_score = get_prediction_score(news_content, model_hate, tokenizer_hate, positive_label_idx=0)
+    print(f"혐오 분석 (비혐오 점수): {hate_speech_score:.1f}%")
+
+    # 낚시성 분석 (진짜 뉴스 점수) - label=0이 진짜 뉴스/비클릭베이트
+    train_clickbait, test_clickbait = None, None
+    try: train_clickbait, test_clickbait = load_and_prepare_data("clickbait.csv", "title", "label")
+    except (FileNotFoundError, ValueError) as e: print(f"Clickbait 데이터셋 오류: {e}. 낚시성 분석 건너뜜.")
+    model_clickbait, tokenizer_clickbait = train_or_load_model(train_clickbait, test_clickbait, model_name, "clickbait") if train_clickbait else (None, None)
+    clickbait_score = get_prediction_score(news_content, model_clickbait, tokenizer_clickbait, positive_label_idx=0)
+    print(f"낚시성 분석 (진짜 뉴스 점수): {clickbait_score:.1f}%")
+
+    # --- 종합 결과 및 판단 ---
+    # 각 점수가 높을수록 '진실'에 긍정적인 영향을 미치도록 조정
+    overall_truth_score = (chatgpt_similarity * 0.40) + \
+                          (sentiment_score * 0.25) + \
+                          (hate_speech_score * 0.20) + \
+                          (clickbait_score * 0.15)
+    overall_truth_score = min(100.0, max(0.0, overall_truth_score))
+
+    print(f"\n--- 종합 '진실성' 점수: {overall_truth_score:.1f}% ---")
+    if overall_truth_score >= 75:
+        print("판단: Real (매우 신뢰할 만한 뉴스에 가깝습니다.)")
+    elif overall_truth_score >= 50:
+        print("판단: Neutral (일부 확인이 필요할 수 있습니다.)")
+    else:
+        print("판단: Fake (신뢰하기 어려운 뉴스일 가능성이 높습니다.)")
+
+    input("\n분석 종료. 엔터 키를 눌러 프로그램을 닫으세요...")
+
+if __name__ == "__main__":
+    main()
