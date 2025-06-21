@@ -1,0 +1,553 @@
+import os
+import ctypes
+import re
+import requests
+from bs4 import BeautifulSoup
+from youtube_transcript_api import YouTubeTranscriptApi
+import openai
+import pandas as pd
+import torch
+from datasets import Dataset
+from sklearn.model_selection import train_test_split
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, pipeline
+# dotenv 라이브러리가 설치되어 있다면 주석을 해제하세요.
+# from dotenv import load_dotenv
+
+# --- 초기 설정 및 안내 ---
+
+# 바탕화면에 안내 파일 생성 (Windows 전용)
+try:
+    file_path = os.path.join(os.path.expanduser("~"), "Desktop", "진실의 눈.txt")
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("This program is for news judgement. \n\nPlease follow the instructions. \nThe results will show as (Real/Fake) and Percentage %")
+    os.system(f"notepad \"{file_path}\"") # 경로에 공백이 있을 경우를 대비해 큰따옴표 추가
+except Exception as e:
+    print(f"안내 파일 생성 및 열기 실패: {e}")
+
+# 프로그램 시작 안내 메시지
+if ctypes.windll.user32.MessageBoxW(0, "Please wait for modules to load...", "Program", 0x30 | 0x1) == 0x1:
+    pass
+else:
+    exit()
+
+# --- 패키지 설치 안내 (자동 설치 대신 사용자 안내) ---
+print("\n" * 10) # 화면 정리
+print("필요한 Python 패키지가 설치되었는지 확인합니다.")
+print("아직 설치되지 않았다면, 다음 명령어를 실행하여 설치해 주세요:")
+print("pip install -r requirements.txt")
+print("\n필요한 패키지:")
+print("- youtube-transcript-api")
+print("- openai")
+print("- transformers")
+print("- beautifulsoup4")
+print("- datasets")
+print("- scikit-learn")
+print("- pandas")
+print("- torch")
+print("\n계속하려면 아무 키나 누르세요...")
+input() # 사용자 입력을 기다림
+
+
+# --- API 키 로드 ---
+# 환경 변수에서 API 키 로드. 실제 사용 시 시스템 환경 변수를 설정해야 합니다.
+# 예시: set NAVER_CLIENT_ID=YOUR_ID (Windows CMD)
+#       export NAVER_CLIENT_ID=YOUR_ID (Linux/macOS)
+# .env 파일 사용 시 load_dotenv() 주석 해제 후 .env 파일 생성
+# load_dotenv()
+
+client_id = os.getenv('NAVER_CLIENT_ID')
+client_secret = os.getenv('NAVER_CLIENT_SECRET')
+openai.api_key = os.getenv('OPENAI_API_KEY')
+
+if not all([client_id, client_secret, openai.api_key]):
+    ctypes.windll.user32.MessageBoxW(
+        0,
+        "API 키가 설정되지 않았습니다. NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, OPENAI_API_KEY 환경 변수를 설정해주세요.",
+        "Configuration Error",
+        0x10 | 0x1
+    )
+    exit()
+
+# --- ChatGPT 질문 함수 ---
+def question_chatgpt(question):
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            max_tokens=120,
+            temperature=0.7,
+            messages=[
+                {
+                    "role": "user",
+                    "content": question
+                }
+            ]
+        )
+        return response['choices'][0]['message']['content'].strip()
+    except openai.error.OpenAIError as e:
+        ctypes.windll.user32.MessageBoxW(0, f"ChatGPT API 오류: {e}", "API Error", 0x10 | 0x1)
+        exit()
+    except Exception as e:
+        ctypes.windll.user32.MessageBoxW(0, f"예상치 못한 오류 발생: {e}", "Error", 0x10 | 0x1)
+        exit()
+
+# --- 뉴스 입력 클래스 ---
+class Pick_news:
+    def __init__(self):
+        self.news_content = None # 크롤링된 뉴스 본문
+        self.input_url = None    # 입력된 URL
+
+    def _crawl_naver_news_content(self, url):
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        try:
+            response = requests.get(url, headers=headers, timeout=10) # 타임아웃 추가
+            response.raise_for_status() # 200 OK가 아니면 HTTPError 발생
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            # 네이버 뉴스 본문 태그는 'dic_area' ID를 가진 article 태그
+            content_tag = soup.find('article', {'id': 'dic_area'})
+            
+            # 다른 가능한 본문 영역 클래스도 시도 (네이버 뉴스 구조 변경 대비)
+            if not content_tag:
+                content_tag = soup.find('div', class_='go_trans _article_content') # 연합뉴스 등 일부 유형
+
+            if content_tag:
+                # 불필요한 태그 제거 (광고, 기자정보 등)
+                for script_or_style in content_tag(["script", "style", "figcaption", "span", "em", "a"]):
+                    script_or_style.extract()
+                return content_tag.get_text().strip()
+            else:
+                return None # 본문을 찾지 못함
+        except requests.exceptions.RequestException as e:
+            print(f"네이버 뉴스 크롤링 요청 오류: {e}")
+            return None
+        except Exception as e:
+            print(f"네이버 뉴스 크롤링 중 알 수 없는 오류: {e}")
+            return None
+
+    def get_naver_url(self):
+        while True:
+            url = input("Naver news URL: ").strip()
+            if not url:
+                if ctypes.windll.user32.MessageBoxW(0, "URL이 입력되지 않았습니다. 다시 시도하시겠습니까?", "입력 오류", 0x30 | 0x4) == 6: # Yes/No
+                    continue
+                else:
+                    return False # 취소 또는 아니오 선택 시 종료 신호
+            
+            content = self._crawl_naver_news_content(url)
+            if content:
+                self.news_content = content
+                self.input_url = url
+                return True
+            else:
+                if ctypes.windll.user32.MessageBoxW(0, "뉴스 본문을 찾을 수 없습니다. URL을 확인하고 다시 시도하시겠습니까?", "크롤링 실패", 0x30 | 0x4) == 6:
+                    continue
+                else:
+                    return False
+
+    def get_youtube_url(self):
+        def extract_video_id(url):
+            match = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', url)
+            return match.group(1) if match else None
+
+        while True:
+            video_url = input("YouTube video URL: ").strip()
+            if not video_url:
+                if ctypes.windll.user32.MessageBoxW(0, "URL이 입력되지 않았습니다. 다시 시도하시겠습니까?", "입력 오류", 0x30 | 0x4) == 6:
+                    continue
+                else:
+                    return False
+            
+            video_id = extract_video_id(video_url)
+            if not video_id:
+                if ctypes.windll.user32.MessageBoxW(0, "유효한 YouTube 비디오 ID를 찾을 수 없습니다. URL을 확인하고 다시 시도하시겠습니까?", "URL 오류", 0x30 | 0x4) == 6:
+                    continue
+                else:
+                    return False
+            
+            try:
+                # 한국어(ko) 우선, 없으면 영어(en) 시도
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                transcript_langs = [t.language_code for t in transcript_list]
+                
+                transcript_text = None
+                if 'ko' in transcript_langs:
+                    transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko'])
+                    transcript_text = "\n".join([entry['text'] for entry in transcript])
+                elif 'en' in transcript_langs:
+                    transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+                    transcript_text = "\n".join([entry['text'] for entry in transcript])
+                else:
+                    ctypes.windll.user32.MessageBoxW(0, "해당 비디오에 한국어 또는 영어 스크립트가 없습니다.", "스크립트 없음", 0x30 | 0x1)
+                    if ctypes.windll.user32.MessageBoxW(0, "다른 YouTube URL로 다시 시도하시겠습니까?", "재시도", 0x30 | 0x4) == 6:
+                        continue
+                    else:
+                        return False
+
+                if transcript_text:
+                    self.news_content = transcript_text
+                    self.input_url = video_url
+                    return True
+                else:
+                    if ctypes.windll.user32.MessageBoxW(0, "YouTube 스크립트를 가져오지 못했습니다. 다시 시도하시겠습니까?", "스크립트 실패", 0x30 | 0x4) == 6:
+                        continue
+                    else:
+                        return False
+            except Exception as e:
+                ctypes.windll.user32.MessageBoxW(0, f"YouTube 스크립트 가져오기 실패: {str(e)}", "Error", 0x10 | 0x1)
+                if ctypes.windll.user32.MessageBoxW(0, "다른 YouTube URL로 다시 시도하시겠습니까?", "재시도", 0x30 | 0x4) == 6:
+                    continue
+                else:
+                    return False
+
+    def get_news_manually(self): # 메서드명 변경
+        while True:
+            text = input("Please enter the news manually (Type 'done' on a new line to finish): \n").strip()
+            if not text:
+                if ctypes.windll.user32.MessageBoxW(0, "입력된 텍스트가 없습니다. 다시 시도하시겠습니까?", "입력 오류", 0x30 | 0x4) == 6:
+                    continue
+                else:
+                    return False
+            
+            full_text = []
+            full_text.append(text)
+            while True: # 여러 줄 입력 지원
+                line = input().strip()
+                if line.lower() == 'done':
+                    break
+                full_text.append(line)
+            
+            self.news_content = "\n".join(full_text)
+            self.input_url = "Manual Input" # 수동 입력임을 표시
+            return True
+
+
+# --- 메인 실행 로직 ---
+Pick_news_instance = Pick_news()
+
+if ctypes.windll.user32.MessageBoxW(0, 'To start "진실의 눈" press (Y)', "Program", 0x20 | 0x4) != 6:
+    exit()
+
+input_successful = False
+while not input_successful:
+    articleTemp = ctypes.windll.user32.MessageBoxW(0, '뉴스 입력 방식을 선택하세요:\n[네이버 뉴스 URL]: (Y)\n[YouTube URL]: (N)\n[텍스트 직접 입력]: (Cancel button)', "뉴스 입력 선택", 0x20 | 0x3)
+
+    if articleTemp == 0x6:  # Yes
+        input_successful = Pick_news_instance.get_naver_url()
+    elif articleTemp == 0x7: # No
+        input_successful = Pick_news_instance.get_youtube_url()
+    elif articleTemp == 0x2: # Cancel
+        input_successful = Pick_news_instance.get_news_manually()
+    else:
+        ctypes.windll.user32.MessageBoxW(0, "유효하지 않은 선택입니다.", "오류", 0x10 | 0x1)
+        exit()
+
+if not input_successful: # 입력 과정에서 사용자가 종료를 선택한 경우
+    exit()
+
+# 뉴스 본문과 URL을 인스턴스 변수에서 가져옴
+news = Pick_news_instance.news_content
+url_find = Pick_news_instance.input_url
+
+if not news: # 최종적으로 뉴스 내용이 없는 경우
+    ctypes.windll.user32.MessageBoxW(0, "분석할 뉴스 내용이 없습니다. 프로그램을 종료합니다.", "오류", 0x10 | 0x1)
+    exit()
+
+print("\n--- 뉴스 내용 추출 완료 ---")
+print(f"원본 입력 소스: {url_find}")
+# print(f"추출된 뉴스 내용 (일부): {news[:200]}...") # 디버깅용
+
+
+# --- ChatGPT로 키워드 추출 ---
+print("\n--- ChatGPT로 키워드 추출 중... ---")
+chatgpt_keywords = question_chatgpt(news + "\n\n이 뉴스를 키워드 5개 이하로 요약. 다른 말은 하지마. ex) 000, 000, 000, 000, 000")
+print(f"추출된 키워드: {chatgpt_keywords}")
+
+# --- 네이버 뉴스 검색 및 대표 뉴스 추출 ---
+def get_representative_news(keywords_string, client_id, client_secret):
+    headers = {
+        'X-Naver-Client-Id': client_id,
+        'X-Naver-Client-Secret': client_secret
+    }
+
+    keywords = [kw.strip() for kw in keywords_string.split(",") if kw.strip()]
+    all_news_items = []
+
+    print("\n--- 네이버 뉴스 API로 유사 뉴스 검색 중... ---")
+    for kw in keywords:
+        url = f'https://openapi.naver.com/v1/search/news.json?query={kw}&display=5&sort=date'
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status() # HTTP 오류 발생 시 예외
+            items = response.json().get('items', [])
+            all_news_items.extend(items)
+        except requests.exceptions.RequestException as e:
+            print(f"네이버 뉴스 API 요청 오류 ({kw}): {e}")
+            continue
+        except Exception as e:
+            print(f"네이버 뉴스 검색 중 알 수 없는 오류 ({kw}): {e}")
+            continue
+
+    # 중복 뉴스 제거 (링크 기준) 및 description 활용
+    unique_contents = {} # 링크: description
+    for item in all_news_items:
+        # HTML 태그 제거 및 불필요한 엔티티 디코딩
+        clean_description = BeautifulSoup(item.get('description', ''), 'html.parser').get_text()
+        unique_contents[item['link']] = clean_description
+
+    candidate_contents = list(unique_contents.values())
+    
+    if not candidate_contents:
+        ctypes.windll.user32.MessageBoxW(0, "네이버 뉴스 API에서 관련 뉴스를 찾을 수 없습니다.", "검색 실패", 0x10 | 0x1)
+        return None
+
+    # 키워드 일치도 기준으로 가장 적합한 description 선택
+    scores = [sum(c.count(k) for k in keywords) for c in candidate_contents]
+    
+    if not scores or max(scores) == 0: # 모든 content가 비어있거나 키워드 일치도가 0일 경우
+        ctypes.windll.user32.MessageBoxW(0, "유사 뉴스의 본문을 분석할 수 없습니다. (키워드 불일치 또는 내용 없음)", "분석 실패", 0x10 | 0x1)
+        return None
+
+    best_content = candidate_contents[scores.index(max(scores))]
+    return best_content
+
+keywords = chatgpt_keywords
+another_news = get_representative_news(keywords, client_id, client_secret)
+
+if not another_news:
+    ctypes.windll.user32.MessageBoxW(0, "유사 뉴스 내용을 가져오지 못했습니다. 유사도 분석을 건너뜝니다.", "분석 건너뜀", 0x30 | 0x1)
+    chatgpt_percentage = 0 # 유사 뉴스 없으면 유사도 0으로 설정
+else:
+    # --- ChatGPT로 유사도 평가 ---
+    print("\n--- ChatGPT로 뉴스 유사도 평가 중... ---")
+    try:
+        chatgpt_percentage = int(question_chatgpt(f"{news}\n\n이 문장과 \n{another_news}\n\n이 문장의 유사도를 평가해줘. 다른 말은 하지말고 백분율 숫자만 말해줘. 예: 75"))
+        if not (0 <= chatgpt_percentage <= 100):
+            print("ChatGPT 유사도 결과가 유효한 범위(0-100)를 벗어났습니다. 0으로 설정합니다.")
+            chatgpt_percentage = 0
+    except ValueError:
+        print("ChatGPT 유사도 결과가 숫자가 아닙니다. 0으로 설정합니다.")
+        chatgpt_percentage = 0
+    except Exception as e:
+        print(f"ChatGPT 유사도 평가 중 오류 발생: {e}. 0으로 설정합니다.")
+        chatgpt_percentage = 0
+    
+    print(f"ChatGPT 유사도: {chatgpt_percentage}%")
+
+
+#===========================================================================================================
+# --- KLUE RoBERTa Fine-tuning 및 예측 ---
+
+# 모델 학습 및 저장 디렉토리
+FINETUNED_MODELS_DIR = "./finetuned_models"
+os.makedirs(FINETUNED_MODELS_DIR, exist_ok=True) # 디렉토리가 없으면 생성
+
+def load_and_prepare_data(file_path, text_col, label_col):
+    """
+    CSV 파일에서 데이터를 로드하고, 컬럼 이름을 표준화한 후 학습/테스트 세트로 분리합니다.
+    """
+    if not os.path.exists(file_path):
+        ctypes.windll.user32.MessageBoxW(0, f"학습 데이터 파일이 없습니다: {file_path}. Fine-tuning을 건너뜀.", "데이터 오류", 0x10 | 0x1)
+        raise FileNotFoundError(f"Missing data file: {file_path}")
+
+    df = pd.read_csv(file_path)
+    df = df.rename(columns={text_col: "text", label_col: "label"})
+    df["label"] = df["label"].astype(int)
+    
+    # 데이터셋이 너무 작을 경우 분할 문제 발생 가능성 대비
+    if len(df) < 2:
+        ctypes.windll.user32.MessageBoxW(0, f"데이터셋이 너무 작습니다: {file_path}. Fine-tuning을 건너뜀.", "데이터 오류", 0x10 | 0x1)
+        raise ValueError(f"Dataset too small: {file_path}")
+
+    # stratify=df["label"] 추가하여 레이블 비율 유지
+    train_texts, test_texts, train_labels, test_labels = train_test_split(
+        df["text"], df["label"], test_size=0.1, random_state=42, stratify=df["label"])
+    
+    train_dataset = Dataset.from_dict({"text": train_texts.tolist(), "label": train_labels.tolist()})
+    test_dataset = Dataset.from_dict({"text": test_texts.tolist(), "label": test_labels.tolist()})
+    return train_dataset, test_dataset
+
+def preprocess_data(tokenizer, dataset):
+    """
+    토크나이저를 사용하여 데이터셋을 전처리합니다.
+    """
+    def tokenize_function(examples):
+        return tokenizer(examples["text"], truncation=True, padding=True, max_length=512)
+    
+    tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
+    tokenized_dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+    return tokenized_dataset
+
+def train_or_load_model(train_dataset, test_dataset, model_name, task_name):
+    """
+    모델을 파인튜닝하거나, 이미 파인튜닝된 모델이 있다면 로드합니다.
+    """
+    output_dir = os.path.join(FINETUNED_MODELS_DIR, f"finetuned_klue_{task_name}")
+
+    if os.path.exists(output_dir) and os.listdir(output_dir):
+        print(f"'{task_name}' 모델이 이미 존재합니다. 저장된 모델을 로드합니다.")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(output_dir)
+            model = AutoModelForSequenceClassification.from_pretrained(output_dir)
+            return model, tokenizer
+        except Exception as e:
+            print(f"저장된 '{task_name}' 모델 로드 실패. 다시 파인튜닝을 시도합니다: {e}")
+            # 로드 실패 시 강제로 다시 학습하도록 함
+            import shutil
+            shutil.rmtree(output_dir, ignore_errors=True) # 기존 모델 삭제
+            pass # 아래 학습 로직으로 넘어감
+    
+    print(f"'{task_name}' 모델을 파인튜닝합니다...")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenized_train = preprocess_data(tokenizer, train_dataset)
+        tokenized_test = preprocess_data(tokenizer, test_dataset)
+
+        model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(device)
+
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            evaluation_strategy="epoch",
+            learning_rate=2e-5,
+            per_device_train_batch_size=8,
+            per_device_eval_batch_size=16,
+            num_train_epochs=3,
+            weight_decay=0.01,
+            save_total_limit=1,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            logging_steps=100,
+            seed=42,
+            logging_dir=f"{output_dir}/logs",
+            disable_tqdm=True # 학습 진행 바 숨기기
+        )
+
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized_train,
+            eval_dataset=tokenized_test,
+        )
+
+        trainer.train()
+        trainer.save_model(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print(f"'{task_name}' 모델 파인튜닝 및 저장 완료.")
+        return model, tokenizer
+    except Exception as e:
+        ctypes.windll.user32.MessageBoxW(0, f"'{task_name}' 모델 파인튜닝 실패: {e}\n관련 기능을 건너뜁니다.", "Fine-tuning Error", 0x10 | 0x1)
+        print(f"Error during fine-tuning {task_name}: {e}")
+        return None, None # 모델 로드/학습 실패 시 None 반환
+
+def convert_score(result, positive_label_idx=1):
+    """
+    모델 예측 결과를 0-100점 스케일로 변환합니다.
+    positive_label_idx: 긍정/참/진실을 나타내는 레이블의 인덱스 (0 또는 1)
+    """
+    label_idx = int(result['label'].split('_')[-1])
+    score = result['score'] * 100
+    
+    if label_idx == positive_label_idx:
+        final_score = score
+    else:
+        final_score = 100 - score
+    return round(final_score, 1)
+
+# KLUE RoBERTa 베이스 모델 이름
+model_name = "klue/roberta-base"
+
+# 예측용 함수 (모델 로드 실패 시 대비)
+def predict_score(text, model, tokenizer, positive_label_idx=1):
+    if model is None or tokenizer is None:
+        return 50.0 # 모델이 없으면 중간값 반환 또는 오류 처리
+    try:
+        classifier = pipeline("text-classification", model=model, tokenizer=tokenizer, device=0 if torch.cuda.is_available() else -1)
+        result = classifier(text)[0]
+        score = convert_score(result, positive_label_idx=positive_label_idx)
+        return score
+    except Exception as e:
+        print(f"모델 예측 중 오류 발생: {e}. 기본값 50으로 설정합니다.")
+        return 50.0 # 예측 오류 시 기본값 반환
+
+print("\n--- KLUE RoBERTa 모델 로드 및/또는 파인튜닝 시작 ---")
+
+# 1) NSMC (긍정/부정)
+# label=1 (긍정), label=0 (부정) -> 긍정 점수를 위해 positive_label_idx=1
+model_nsmc, tokenizer_nsmc = None, None
+try:
+    train_nsmc, test_nsmc = load_and_prepare_data("nsmc.csv", "document", "label")
+    model_nsmc, tokenizer_nsmc = train_or_load_model(train_nsmc, test_nsmc, model_name, "nsmc")
+except (FileNotFoundError, ValueError):
+    print("NSMC 데이터셋 문제로 감정 분석을 건너뜠습니다.")
+
+# 2) HateSpeech (중립/혐오)
+# label=0 (중립/비혐오), label=1 (혐오) -> 혐오도가 낮을수록(중립) 높은 점수를 위해 positive_label_idx=0
+model_hate, tokenizer_hate = None, None
+try:
+    train_hate, test_hate = load_and_prepare_data("hatespeech.csv", "sentence", "label")
+    model_hate, tokenizer_hate = train_or_load_model(train_hate, test_hate, model_name, "hatespeech")
+except (FileNotFoundError, ValueError):
+    print("HateSpeech 데이터셋 문제로 혐오 분석을 건너뜠습니다.")
+
+# 3) Clickbait (진짜/가짜 뉴스)
+# label=0 (진짜 뉴스/비클릭베이트), label=1 (가짜 뉴스/클릭베이트) -> 진짜 뉴스에 가까울수록 높은 점수를 위해 positive_label_idx=0
+model_clickbait, tokenizer_clickbait = None, None
+try:
+    train_clickbait, test_clickbait = load_and_prepare_data("clickbait.csv", "title", "label")
+    model_clickbait, tokenizer_clickbait = train_or_load_model(train_clickbait, test_clickbait, model_name, "clickbait")
+except (FileNotFoundError, ValueError):
+    print("Clickbait 데이터셋 문제로 낚시성 뉴스 분석을 건너뜠습니다.")
+
+# 각 모델별 예측
+print("\n--- 뉴스 특성 분석 중... ---")
+# 감정 점수: 높을수록 긍정
+model_a_score = predict_score(news, model_nsmc, tokenizer_nsmc, positive_label_idx=1) 
+# 혐오 점수: 높을수록 중립(비혐오)
+model_b_score = predict_score(news, model_hate, tokenizer_hate, positive_label_idx=0)
+# 낚시 점수: 높을수록 진짜 뉴스(비클릭베이트)
+model_c_score = predict_score(news, model_clickbait, tokenizer_clickbait, positive_label_idx=0)
+
+
+#===========================================================================================================
+# --- 결과 출력 및 종합 판단 ---
+
+print("\n--- 분석 결과 ---")
+
+# 모든 점수가 '진실'에 가까울수록 높게 나오도록 조정됨
+# chatgpt_percentage: 높을수록 원본과 유사 (진실성 척도)
+# model_a_score: 높을수록 긍정 (부정적이지 않음 = 진실성에 긍정적)
+# model_b_score: 높을수록 비혐오 (혐오적이지 않음 = 진실성에 긍정적)
+# model_c_score: 높을수록 진짜 뉴스 (낚시성 아님 = 진실성에 긍정적)
+
+# 가중치 합산하여 최종 '진실성' 점수 계산
+# 가중치는 상황에 따라 조절할 수 있습니다.
+# 예: 유사도(0.4), 감정(0.2), 혐오(0.2), 낚시(0.2)
+# 중요도: 유사도 > 감정 > 혐오 > 낚시
+overall_truth_score = (chatgpt_percentage * 0.40) + \
+                      (model_a_score * 0.25) + \
+                      (model_b_score * 0.20) + \
+                      (model_c_score * 0.15)
+
+# 총점이 100을 초과하지 않도록 보정 (가중치 합이 1이므로 일반적으로 필요 없지만 안전장치)
+overall_truth_score = min(100.0, max(0.0, overall_truth_score))
+
+
+print(f"유사도 (ChatGPT): {chatgpt_percentage:.1f}%")
+print(f"감정 분석 (긍정 점수): {model_a_score:.1f}%")
+print(f"혐오 분석 (비혐오 점수): {model_b_score:.1f}%")
+print(f"낚시성 분석 (진짜 뉴스 점수): {model_c_score:.1f}%")
+print(f"\n--- 종합 '진실성' 점수: {overall_truth_score:.1f}% ---")
+
+# 최종 판단 (기준값은 필요에 따라 조절)
+if overall_truth_score >= 70:
+    print("판단: Real (신뢰할 만한 뉴스에 가깝습니다.)")
+elif overall_truth_score >= 50:
+    print("판단: Neutral (일부 확인이 필요할 수 있습니다.)")
+else:
+    print("판단: Fake (신뢰하기 어려운 뉴스일 가능성이 높습니다.)")
+
+print("\n--- 분석 종료 ---")
+input("엔터 키를 눌러 프로그램을 종료하세요...") # 프로그램 즉시 종료 방지
