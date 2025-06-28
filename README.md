@@ -1,11 +1,14 @@
-# Update news_judgement.py
+# News Judgement Module
+# 
+# This module is responsible for analyzing and rating the quality, bias, and credibility of news articles.
+# It leverages natural language processing techniques and heuristic scoring systems to deliver reliable assessments.
+# 
+# Final update: 2025-06-28
+# 
+# - Thanks to our team for collaboration and support.
+# - Use this code for good, to promote media literacy and informed thinking.
+# 
+# Goodbye and best of luck on your journey!
 
-# I think it will be our last update.
-# Thanks for our team mates that helped me writing this code.
-# Use this code for your good.
-# We will be making another project.
-
-# Bye Bye
-
-# 2025.06.28 
-# -by Bulldozercafe-
+# 2025-06-28
+# — Bulldozercafe
