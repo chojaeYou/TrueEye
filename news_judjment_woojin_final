@@ -2,19 +2,7 @@
 
 
 
-
 import os
-import ctypes
-import re
-import requests
-from bs4 import BeautifulSoup
-from youtube_transcript_api import YouTubeTranscriptApi
-import openai
-import pandas as pd
-import torch
-from datasets import Dataset
-from sklearn.model_selection import train_test_split
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, pipeline
 
 # --- 환경 변수에서 API 키 로드 ---
 NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID')
@@ -54,6 +42,17 @@ for package in REQUIRED_PACKAGES:
             show_message(f"'{package}' 설치 실패: {e}\n프로그램을 종료합니다.", "설치 오류", 0x10 | 0x1)
             sys.exit(1) # 설치 실패 시 프로그램 종료
 
+import ctypes
+import re
+import requests
+from bs4 import BeautifulSoup
+from youtube_transcript_api import YouTubeTranscriptApi
+import openai
+import pandas as pd
+import torch
+from datasets import Dataset
+from sklearn.model_selection import train_test_split
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, pipeline
 # 2. API 키 로드 또는 사용자에게 입력 요청 (보안 주의!)
 # 환경 변수에서 API 키 로드 시도
 NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID')
